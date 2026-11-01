@@ -7,8 +7,11 @@ import warnings
 
 import pandas as pd
 
+from .core.allocation import AllocationMethod, register_method
 
-class DHondt:
+
+@register_method("dhondt")
+class DHondt(AllocationMethod):
     """D'Hondt seat allocation for a single region.
 
     Region parameters go in the constructor; the parties come with the votes
@@ -63,7 +66,7 @@ class DHondt:
         if not hasattr(self, "seats_"):
             raise RuntimeError("DHondt has not been fitted yet; call fit() first.")
 
-    def fit(self, votes: dict[str, int], blank_votes: int = 0) -> dict[str, int]:
+    def fit(self, votes: dict[str, float], blank_votes: int = 0) -> dict[str, int]:
         """Allocate seats and return the dict party -> seats.
 
         Parameters

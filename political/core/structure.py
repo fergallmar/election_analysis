@@ -9,8 +9,8 @@ mainland, island in the Canary/Balearic Islands).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Iterator, NamedTuple
+from dataclasses import dataclass, field, replace
+from typing import Iterator, Mapping, NamedTuple
 
 
 @dataclass(frozen=True, eq=False)
@@ -73,10 +73,66 @@ class Country:
     def chambers(self) -> list[str]:
         return sorted({ch for _, t in self.walk() for ch in t.seats})
 
+    def district_nodes(self, chamber: str) -> list[tuple[tuple[str, ...], Territory]]:
+        """(path, territory) of every electoral district of a chamber."""
+        return [(path, t) for path, t in self.walk() if chamber in t.seats]
+
     def districts(self, chamber: str) -> list[District]:
         """Electoral districts of a chamber, in tree order."""
         return [District(t.name, path, t.seats[chamber])
-                for path, t in self.walk() if chamber in t.seats]
+                for path, t in self.district_nodes(chamber)]
+
+    def get_territory(self, name: str) -> Territory:
+        """Find a territory (region, province, ...) by name."""
+        for _, t in self.walk():
+            if t.name == name:
+                return t
+        raise KeyError(f"Unknown territory '{name}'")
+
+    @classmethod
+    def from_territory(cls, territory: Territory,
+                       level_names: tuple[str, ...] = ()) -> Country:
+        """Wrap a single territory (e.g. one region) as a Country."""
+        return cls(name=territory.name, level_names=level_names, regions=(territory,))
+
+    def redistrict(self, chamber: str, level: int,
+                   seats: Mapping[str, int] | None = None) -> Country:
+        """New Country whose districts for `chamber` sit at `level`.
+
+        level 1 = regions, 2 = provinces, 3 = islands... The seats of the
+        districts below are added up unless overridden by `seats`
+        ({territory name: seats}). Districts shallower than `level` are kept.
+        """
+        if level < 1:
+            raise ValueError("level must be >= 1")
+
+        def total(node: Territory) -> int:
+            return node.seats.get(chamber, 0) + sum(total(c) for c in node.children)
+
+        def strip(node: Territory) -> Territory:
+            return replace(
+                node,
+                seats={k: v for k, v in node.seats.items() if k != chamber},
+                children=tuple(strip(c) for c in node.children))
+
+        def rebuild(node: Territory, depth: int) -> Territory:
+            if depth == level:
+                n = seats[node.name] if seats and node.name in seats else total(node)
+                new_seats = {k: v for k, v in node.seats.items() if k != chamber}
+                if n:
+                    new_seats[chamber] = n
+                return replace(node, seats=new_seats,
+                               children=tuple(strip(c) for c in node.children))
+            if chamber in node.seats:  # shallower district: cannot be split
+                return node
+            return replace(node, children=tuple(rebuild(c, depth + 1) for c in node.children))
+
+        expected = {k: v for k, v in self.expected_seats.items()
+                    if seats is None or k != chamber}
+        new = Country(self.name, self.level_names,
+                      tuple(rebuild(r, 1) for r in self.regions), expected)
+        new.validate()
+        return new
 
     def get_district(self, chamber: str, name: str) -> District:
         found = [d for d in self.districts(chamber) if d.name == name]
